@@ -38,8 +38,8 @@ fn create_histogram(path: String, data: Vec<isize>) {
         .configure_mesh()
         .disable_x_mesh()
         .bold_line_style(&WHITE.mix(0.3))
-        .y_desc("Length")
-        .x_desc("Amount")
+        .y_desc("Amount")
+        .x_desc("Length")
         .axis_desc_style(("sans-serif", 50))
         .draw()
         .unwrap();
