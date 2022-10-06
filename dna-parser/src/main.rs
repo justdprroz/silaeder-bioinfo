@@ -1,11 +1,12 @@
+use colored::Colorize;
 use itertools::Itertools;
 use plotters::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs,
-    iter::FromIterator,
+    fs::{self, File},
+    io::Write,
+    iter::FromIterator, process,
 };
-
 struct OpenReadingFrame {
     start: usize,
     stop: usize,
@@ -104,7 +105,12 @@ fn parse_orfs(dna: &str, reverse: bool, codons: &CodonsTable) -> Vec<OpenReading
 }
 
 // parse amino acids from dna
-fn parse_amino_acid(dna: &String, rev: &String, orf: &OpenReadingFrame, lut: &BTreeMap<&str, &str>) -> String {
+fn parse_amino_acid(
+    dna: &String,
+    rev: &String,
+    orf: &OpenReadingFrame,
+    lut: &BTreeMap<&str, &str>,
+) -> String {
     let mut ret: String = String::new();
     if !orf.reverse {
         for i in (orf.start..orf.stop - 3).step_by(3) {
@@ -137,9 +143,43 @@ fn reverse_compliment(dna: &String) -> String {
 }
 
 fn main() {
+    let mut print_to_file = false;
+    let mut draw_histogram = false;
+    let mut use_test = false;
+
+    for arg in std::env::args() {
+        if arg == "help" {
+            println!("use:\n\t'help' - for help\n\t'file' - to write output to file\n\t'test' - to use short test\n\t'hist' - to create histogram");
+            process::exit(0);
+        }
+        if arg == "file" {
+            print_to_file = true;
+        }
+        if arg == "hist" {
+            draw_histogram = true;
+        }
+        if arg == "test" {
+            use_test = true;
+        }
+    }
+
+    eprintln!("Run settings:");
+    if print_to_file {
+        eprintln!("\tSave to file");
+    }
+    if draw_histogram {
+        eprintln!("\tDraw histogram");
+    }
+    if use_test {
+        eprintln!("\tUse simple test");
+    }
+
     // get DNA string
-    // let dna = get_dna_string("genome.fna".to_string());
-    let dna = "TTATGCATGCATAGATAA".to_string();
+    let dna = if use_test {
+        "TTATGCATGCATAGATAA".to_string()
+    } else {
+        get_dna_string("genome.fna".to_string())
+    };
 
     // codons
     let codons = CodonsTable {
@@ -194,23 +234,49 @@ fn main() {
     orfs.extend(parse_orfs(&reversed_dna, true, &codons));
 
     // print found orfs
-    println!("Current dna: {}", dna);
-    for orf in &orfs {
+    if print_to_file {
+        let mut file = File::create("output.txt").unwrap();
+        writeln!(&mut file, "Current dna: {}", format!("{}", dna),).unwrap();
+        for orf in &orfs {
+            writeln!(
+                &mut file,
+                "ORF: {}, {}, {}\t\tAmino acids: {}",
+                orf.start,
+                orf.stop,
+                ["-", "+"][if !orf.reverse { 1 } else { 0 }],
+                parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid),
+            )
+            .unwrap();
+        }
+        writeln!(&mut file, "ORFs amount: {}", format!("{}", orfs.len()),).unwrap();
+    } else {
+        println!("{} {}", "Current dna:".blue(), format!("{}", dna).cyan(),);
+        for orf in &orfs {
+            println!(
+                "{} {}{c} {}{c} {}\t\t{} {}",
+                "ORF:".green(),
+                format!("{}", orf.start).red(),
+                format!("{}", orf.stop).red(),
+                format!("{}", ["-", "+"][if !orf.reverse { 1 } else { 0 }]).red(),
+                "Acid:".green(),
+                parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid).magenta(),
+                c = ",".green(),
+            );
+        }
         println!(
-            "ORF: {}, {}, {}\t\tAcid: {}",
-            orf.start,
-            orf.stop,
-            ["-", "+"][if !orf.reverse { 1 } else { 0 }],
-            parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid)
+            "{} {}",
+            "ORFs amount:".blue(),
+            format!("{}", orfs.len()).cyan(),
         );
     }
-    println!("ORFs amount: {}", orfs.len());
 
     // create histogram
-    let data: Vec<isize> = orfs
-        .iter()
-        .map(|o| (o.stop - o.start) as isize)
-        .sorted()
-        .collect();
-    create_histogram(String::from("histogram.svg"), data);
+    if draw_histogram {
+        let data: Vec<isize> = orfs
+            .iter()
+            .map(|o| (o.stop - o.start) as isize)
+            .sorted()
+            .collect();
+        create_histogram(String::from("histogram.svg"), data);
+    }
 }
