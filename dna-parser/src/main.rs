@@ -3,9 +3,10 @@ use itertools::Itertools;
 use plotters::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs::{self, File},
-    io::Write,
-    iter::FromIterator, process,
+    fs::File,
+    io::{BufRead, BufReader, Write},
+    iter::FromIterator,
+    process,
 };
 struct OpenReadingFrame {
     start: usize,
@@ -18,10 +19,56 @@ struct CodonsTable {
     stop: Vec<&'static str>,
 }
 
-// read file with genome
-fn get_dna_string(path: String) -> String {
-    let raw_genome = fs::read_to_string(path).unwrap();
-    raw_genome[(raw_genome.chars().position(|c| c == '\n').unwrap())..].replace("\n", "")
+#[derive(Debug)]
+struct GenomeInfo {
+    header: String,
+    genome: String,
+}
+
+// read all genomes from specified FASTA file
+fn read_fasta_file(path: String) -> Vec<GenomeInfo> {
+    // prepare variables
+    let mut parsed_data = Vec::<GenomeInfo>::new();
+    let file = File::open(path).unwrap();
+    let mut header: Option<String> = None;
+    let mut sequence: Option<String> = None;
+
+    // read by lines
+    for line_result in BufReader::new(file).lines() {
+        if let Ok(line) = line_result {
+            // if line red properly
+            if line.starts_with(">") {
+                // if line is header
+                if let Some(hdr) = header.as_mut() {
+                    // if header already exists push it to vector
+                    parsed_data.push(GenomeInfo {
+                        header: hdr.clone(),
+                        genome: sequence.as_ref().unwrap().clone(),
+                    });
+                }
+                // reset values
+                header = Some(line.trim().to_string());
+                sequence = Some(String::new());
+            } else {
+                // if line is sequence
+                if let Some(seq) = sequence.as_mut() {
+                    // push line to sequence if not None
+                    seq.push_str(line.trim());
+                }
+            }
+        }
+    }
+
+    // flush genome info if present
+    if let Some(hdr) = header.as_mut() {
+        parsed_data.push(GenomeInfo {
+            header: hdr.clone(),
+            genome: sequence.as_ref().unwrap().clone(),
+        });
+    }
+
+    // return vector
+    parsed_data
 }
 
 // Create histogram and save to  file
@@ -41,7 +88,8 @@ fn create_histogram(path: String, data: Vec<isize>) {
         .margin(50)
         .caption("Genome Length", ("sans-serif", 100.0))
         .build_cartesian_2d(
-            0..unique_data.len() as isize,
+            (*unique_data.iter().min().unwrap()..*unique_data.iter().max().unwrap())
+                .into_segmented(),
             0..*data_amount.iter().max().unwrap(),
         )
         .unwrap();
@@ -113,12 +161,12 @@ fn parse_amino_acid(
 ) -> String {
     let mut ret: String = String::new();
     if !orf.reverse {
-        for i in (orf.start..orf.stop - 3).step_by(3) {
+        for i in (orf.start..orf.stop).step_by(3) {
             let cur_codon = &dna[i - 1..i + 2];
             ret.push_str(lut.get_key_value(cur_codon).unwrap().1);
         }
     } else {
-        for i in ((dna.len() - orf.stop + 1)..(dna.len() - orf.start - 2)).step_by(3) {
+        for i in ((dna.len() - orf.stop + 1)..(dna.len() - orf.start + 1)).step_by(3) {
             let cur_codon = &rev[i - 1..i + 2];
             ret.push_str(lut.get_key_value(cur_codon).unwrap().1);
         }
@@ -143,140 +191,194 @@ fn reverse_compliment(dna: &String) -> String {
 }
 
 fn main() {
+    // Parse args and init settings
     let mut print_to_file = false;
     let mut draw_histogram = false;
-    let mut use_test = false;
-
-    for arg in std::env::args() {
-        if arg == "help" {
-            println!("use:\n\t'help' - for help\n\t'file' - to write output to file\n\t'test' - to use short test\n\t'hist' - to create histogram");
-            process::exit(0);
-        }
-        if arg == "file" {
-            print_to_file = true;
-        }
-        if arg == "hist" {
-            draw_histogram = true;
-        }
-        if arg == "test" {
-            use_test = true;
-        }
-    }
-
-    eprintln!("Run settings:");
-    if print_to_file {
-        eprintln!("\tSave to file");
-    }
-    if draw_histogram {
-        eprintln!("\tDraw histogram");
-    }
-    if use_test {
-        eprintln!("\tUse simple test");
-    }
-
-    // get DNA string
-    let dna = if use_test {
-        "TTATGCATGCATAGATAA".to_string()
-    } else {
-        get_dna_string("genome.fna".to_string())
-    };
-
-    // codons
-    let codons = CodonsTable {
-        start: vec!["ATG"],
-        stop: vec!["TAG", "TAA", "TGA"],
-    };
-
-    // codon <=> amino acid mapping
-    let aminoacid_to_codon: HashMap<&str, Vec<&str>> = HashMap::from([
-        ("A", vec!["GCA", "GCC", "GCG", "GCT"]),
-        ("C", vec!["TGC", "TGT"]),
-        ("D", vec!["GAC", "GAT"]),
-        ("E", vec!["GAA", "GAG"]),
-        ("F", vec!["TTC", "TTT"]),
-        ("G", vec!["GGA", "GGC", "GGG", "GGT"]),
-        ("H", vec!["CAC", "CAT"]),
-        ("I", vec!["ATA", "ATC", "ATT"]),
-        ("K", vec!["AAA", "AAG"]),
-        ("L", vec!["CTA", "CTC", "CTG", "CTT", "TTA", "TTG"]),
-        ("M", vec!["ATG"]),
-        ("N", vec!["AAC", "AAT"]),
-        ("P", vec!["CCA", "CCC", "CCG", "CCT"]),
-        ("Q", vec!["CAA", "CAG"]),
-        ("R", vec!["AGA", "AGG", "CGA", "CGC", "CGG", "CGT"]),
-        ("S", vec!["AGC", "AGT", "TCA", "TCC", "TCG", "TCT"]),
-        ("T", vec!["ACA", "ACC", "ACG", "ACT"]),
-        ("V", vec!["GTA", "GTC", "GTG", "GTT"]),
-        ("W", vec!["TGG"]),
-        ("Y", vec!["TAC", "TAT"]),
-    ]);
-
-    let codon_to_aminoacid: BTreeMap<&str, &str> = {
-        let mut tmp: BTreeMap<&str, &str> = BTreeMap::new();
-        for aminoacid in aminoacid_to_codon {
-            for codon in aminoacid.1 {
-                tmp.insert(codon, aminoacid.0);
+    let mut path = String::from("genome.fna");
+    let args = std::env::args().collect::<Vec<String>>();
+    for arg_index in 0..args.len() {
+        let arg = &args[arg_index];
+        if arg.starts_with("--") {
+            if arg == "--help" {
+                eprintln!("{}", "Using:".yellow());
+                eprintln!("\t{}", "'--help' - print this message and exit".yellow());
+                eprintln!(
+                    "\t{}",
+                    format!(
+                        "'--input {filename}' - read from {filename}",
+                        filename = "filename".green()
+                    )
+                    .yellow()
+                );
+                eprintln!(
+                    "\t{}",
+                    format!("'--to-file' - save results in file").yellow()
+                );
+                eprintln!("\t{}", format!("'--hist' - draw histogram").yellow());
+                process::exit(0);
+            }
+            if arg == "--input" {
+                path = args[arg_index + 1].clone();
+            }
+            if arg == "--to-file" {
+                print_to_file = true;
+            }
+            if arg == "--hist" {
+                draw_histogram = true;
             }
         }
-        tmp
-    };
-
-    // store found frames
-    let mut orfs = Vec::<OpenReadingFrame>::new();
-
-    // parse first strip
-    orfs.extend(parse_orfs(&dna, false, &codons));
-
-    // reverse compliment
-    let reversed_dna = reverse_compliment(&dna);
-
-    // parse reversed strip
-    orfs.extend(parse_orfs(&reversed_dna, true, &codons));
-
-    // print found orfs
-    if print_to_file {
-        let mut file = File::create("output.txt").unwrap();
-        writeln!(&mut file, "Current dna: {}", format!("{}", dna),).unwrap();
-        for orf in &orfs {
-            writeln!(
-                &mut file,
-                "ORF: {}, {}, {}\t\tAmino acids: {}",
-                orf.start,
-                orf.stop,
-                ["-", "+"][if !orf.reverse { 1 } else { 0 }],
-                parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid),
-            )
-            .unwrap();
-        }
-        writeln!(&mut file, "ORFs amount: {}", format!("{}", orfs.len()),).unwrap();
-    } else {
-        println!("{} {}", "Current dna:".blue(), format!("{}", dna).cyan(),);
-        for orf in &orfs {
-            println!(
-                "{} {}{c} {}{c} {}\t\t{} {}",
-                "ORF:".green(),
-                format!("{}", orf.start).red(),
-                format!("{}", orf.stop).red(),
-                format!("{}", ["-", "+"][if !orf.reverse { 1 } else { 0 }]).red(),
-                "Acid:".green(),
-                parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid).magenta(),
-                c = ",".green(),
-            );
-        }
-        println!(
-            "{} {}",
-            "ORFs amount:".blue(),
-            format!("{}", orfs.len()).cyan(),
-        );
     }
 
-    // create histogram
-    if draw_histogram {
-        let data: Vec<isize> = orfs
-            .iter()
-            .map(|o| (o.stop - o.start) as isize)
-            .sorted()
-            .collect();
-        create_histogram(String::from("histogram.svg"), data);
+    // Print run settings
+    eprintln!("{}", "Run settings:".cyan());
+    eprintln!(
+        "\t{}",
+        format!(
+            "File to use {}{}",
+            path.magenta(),
+            if path == String::from("genome.fna") {
+                " (Using default genome!)".yellow()
+            } else {
+                "".clear()
+            }
+        )
+        .blue()
+    );
+    eprintln!(
+        "\t{}",
+        if print_to_file {
+            "Save to file".blue()
+        } else {
+            "Print to stdout".blue()
+        }
+    );
+    eprintln!(
+        "\t{}",
+        if draw_histogram {
+            "Draw histogram".blue()
+        } else {
+            format!("Do {} draw histogram", "NOT".red()).blue()
+        }
+    );
+
+    // parse genomes from specified file
+    let genomes = read_fasta_file(path);
+
+    if genomes.len() > 0 {
+        eprintln!("Processing {} genome(s)", genomes.len())
+    } else {
+        eprintln!("No genomes found")
+    }
+
+    for genome in genomes {
+        // get DNA string
+        let dna = genome.genome;
+
+        // codons
+        let codons = CodonsTable {
+            start: vec!["ATG"],
+            stop: vec!["TAG", "TAA", "TGA"],
+        };
+
+        // codon <=> amino acid mapping
+        let aminoacid_to_codon: HashMap<&str, Vec<&str>> = HashMap::from([
+            ("A", vec!["GCA", "GCC", "GCG", "GCT"]),
+            ("C", vec!["TGC", "TGT"]),
+            ("D", vec!["GAC", "GAT"]),
+            ("E", vec!["GAA", "GAG"]),
+            ("F", vec!["TTC", "TTT"]),
+            ("G", vec!["GGA", "GGC", "GGG", "GGT"]),
+            ("H", vec!["CAC", "CAT"]),
+            ("I", vec!["ATA", "ATC", "ATT"]),
+            ("K", vec!["AAA", "AAG"]),
+            ("L", vec!["CTA", "CTC", "CTG", "CTT", "TTA", "TTG"]),
+            ("M", vec!["ATG"]),
+            ("N", vec!["AAC", "AAT"]),
+            ("P", vec!["CCA", "CCC", "CCG", "CCT"]),
+            ("Q", vec!["CAA", "CAG"]),
+            ("R", vec!["AGA", "AGG", "CGA", "CGC", "CGG", "CGT"]),
+            ("S", vec!["AGC", "AGT", "TCA", "TCC", "TCG", "TCT"]),
+            ("T", vec!["ACA", "ACC", "ACG", "ACT"]),
+            ("V", vec!["GTA", "GTC", "GTG", "GTT"]),
+            ("W", vec!["TGG"]),
+            ("Y", vec!["TAC", "TAT"]),
+            ("*", vec!["TAG", "TAA", "TGA"]),
+        ]);
+
+        let codon_to_aminoacid: BTreeMap<&str, &str> = {
+            let mut tmp: BTreeMap<&str, &str> = BTreeMap::new();
+            for aminoacid in aminoacid_to_codon {
+                for codon in aminoacid.1 {
+                    tmp.insert(codon, aminoacid.0);
+                }
+            }
+            tmp
+        };
+
+        // store found frames
+        let mut orfs = Vec::<OpenReadingFrame>::new();
+
+        // parse first strip
+        orfs.extend(parse_orfs(&dna, false, &codons));
+
+        // reverse compliment
+        let reversed_dna = reverse_compliment(&dna);
+
+        // parse reversed strip
+        orfs.extend(parse_orfs(&reversed_dna, true, &codons));
+
+        // print found orfs
+        if print_to_file {
+            let mut file = File::create(format!("output{}.txt", genome.header)).unwrap();
+            writeln!(&mut file, "Current dna: {}", format!("{}", genome.header)).unwrap();
+            for orf in &orfs {
+                writeln!(
+                    &mut file,
+                    "ORF: {}, {}, {}\t\tAmino acids: {}",
+                    orf.start,
+                    orf.stop,
+                    ["-", "+"][if !orf.reverse { 1 } else { 0 }],
+                    parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid),
+                )
+                .unwrap();
+            }
+            writeln!(&mut file, "ORFs amount: {}", format!("{}", orfs.len()),).unwrap();
+        } else {
+            println!(
+                "{} {}",
+                "Current dna:".blue(),
+                format!("{}", genome.header).cyan(),
+            );
+            for orf in &orfs {
+                println!(
+                    "{} {}{c} {}{c} {}\t\t{} {}",
+                    "ORF:".green(),
+                    format!("{}", orf.start).red(),
+                    format!("{}", orf.stop).red(),
+                    format!("{}", ["-", "+"][if !orf.reverse { 1 } else { 0 }]).red(),
+                    "Acid:".green(),
+                    parse_amino_acid(&dna, &reversed_dna, &orf, &codon_to_aminoacid).magenta(),
+                    c = ",".green(),
+                );
+            }
+            println!(
+                "{} {}",
+                "ORFs amount:".blue(),
+                format!("{}", orfs.len()).cyan(),
+            );
+        }
+
+        // create histogram
+        if draw_histogram {
+            let data: Vec<isize> = orfs
+                .iter()
+                .map(|o| (o.stop - o.start) as isize)
+                .sorted()
+                .collect();
+            create_histogram(
+                String::from(format!("histogram{}.svg", genome.header)),
+                data,
+            );
+        }
     }
 }
