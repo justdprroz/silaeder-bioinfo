@@ -7,9 +7,11 @@ edition = "2021"
 
 [dependencies]
 colored = "2.0.0"
+csv = "1.1.6"
 itertools = "0.10.4"
 plotters = "0.3.4"
 rand = "0.8.5"
+serde = { version = "1.0.145", features = ["serde_derive"] }
 
 [profile.release]
 opt-level = 3
